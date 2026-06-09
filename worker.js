@@ -34,15 +34,15 @@ async function scrapeApexInstitute() {
     console.log('[APEX] Scraping AIIMT');
     const base = 'https://aiimt.appexonline.com/booking/Booking';
     const allBatches = [];
-    // Limit to one course type for testing
-    const courseTypes = ['DG Course']; // ['DG Course', 'Value Added Course'];
+    // Scrape both course types (full list)
+    const courseTypes = ['DG Course', 'Value Added Course'];
 
     async function post(endpoint, data) {
         const form = new URLSearchParams(data).toString();
         console.log(`[API] Calling ${endpoint} with ${JSON.stringify(data)}`);
         const res = await axios.post(`${base}/${endpoint}`, form, {
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            timeout: 15000 // 15 seconds timeout
+            timeout: 15000
         });
         return res.data;
     }
@@ -54,8 +54,8 @@ async function scrapeApexInstitute() {
         const courses = coursesRaw.filter(c => c.key !== '0');
         console.log(`[API] Found ${courses.length} courses for type ${type}`);
 
-        // Limit to first 3 courses for faster test
-        for (const course of courses.slice(0, 3)) {
+        // Process ALL courses (no slice limit)
+        for (const course of courses) {
             console.log(`[API] Fetching batches for course: ${course.value} (${course.key})`);
             const batchesRaw = await post('GetCourseBatchListByCourse', {
                 course: course.key,
@@ -100,7 +100,7 @@ async function scrapeApexInstitute() {
 
 async function main() {
     console.log(`[START] ${new Date().toISOString()}`);
-    const instituteId = 1;
+    const instituteId = 1; // AIIMT's ID in your WordPress
     let batches = [], status = 'error', errorMsg = '';
     try {
         batches = await scrapeApexInstitute();
