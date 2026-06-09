@@ -30,8 +30,8 @@ async function logSync(instituteId, status, found, saved, error = '') {
     }
 }
 
-async function scrapeApexInstitute(inst) {
-    console.log(`[APEX] ${inst.name}`);
+async function scrapeApexInstitute() {
+    console.log('[APEX] Scraping AIIMT');
     const base = 'https://aiimt.appexonline.com/booking/Booking';
     const allBatches = [];
     const courseTypes = ['DG Course', 'Value Added Course'];
@@ -90,10 +90,10 @@ async function scrapeApexInstitute(inst) {
 
 async function main() {
     console.log(`[START] ${new Date().toISOString()}`);
-    const inst = { id: 1, name: "ASHA INTERNATIONAL INSTITUTE", source_type: "appex" };
+    const instituteId = 1;
     let batches = [], status = 'error', errorMsg = '';
     try {
-        batches = await scrapeApexInstitute(inst);
+        batches = await scrapeApexInstitute();
         status = batches.length ? 'success' : 'partial';
         if (!batches.length) errorMsg = 'No batches found';
     } catch (err) {
@@ -102,7 +102,7 @@ async function main() {
     }
     if (batches.length) {
         try {
-            await axios.post(INGEST_ENDPOINT, { institute_id: inst.id, batches }, { headers: AUTH_HEADERS, timeout: 60000 });
+            await axios.post(INGEST_ENDPOINT, { institute_id: instituteId, batches }, { headers: AUTH_HEADERS, timeout: 60000 });
             console.log(`[SUCCESS] ${batches.length} batches sent.`);
         } catch (err) {
             errorMsg = `Ingest failed: ${err.message}`;
@@ -111,7 +111,7 @@ async function main() {
     } else {
         console.log(`[NO DATA] ${errorMsg}`);
     }
-    await logSync(inst.id, status, batches.length, status === 'success' ? batches.length : 0, errorMsg);
+    await logSync(instituteId, status, batches.length, status === 'success' ? batches.length : 0, errorMsg);
     console.log(`[FINISH] ${new Date().toISOString()}`);
 }
 
