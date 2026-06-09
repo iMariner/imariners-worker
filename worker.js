@@ -23,7 +23,7 @@ async function logSync(instituteId, status, found, saved, error = '') {
             records_saved: saved,
             message: error.substring(0, 500),
             error_detail: error
-        }, { headers: AUTH_HEADERS });
+        }, { headers: AUTH_HEADERS, timeout: 10000 });
         console.log(`[LOG] ${instituteId}: ${status} (found ${found})`);
     } catch (err) {
         console.error(`[LOG ERROR] ${instituteId}:`, err.message);
@@ -34,22 +34,29 @@ async function scrapeApexInstitute() {
     console.log('[APEX] Scraping AIIMT');
     const base = 'https://aiimt.appexonline.com/booking/Booking';
     const allBatches = [];
-    const courseTypes = ['DG Course', 'Value Added Course'];
+    // Limit to one course type for testing
+    const courseTypes = ['DG Course']; // ['DG Course', 'Value Added Course'];
 
     async function post(endpoint, data) {
         const form = new URLSearchParams(data).toString();
+        console.log(`[API] Calling ${endpoint} with ${JSON.stringify(data)}`);
         const res = await axios.post(`${base}/${endpoint}`, form, {
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            timeout: 30000
+            timeout: 15000 // 15 seconds timeout
         });
         return res.data;
     }
 
     for (const type of courseTypes) {
+        console.log(`[API] Fetching courses for type: ${type}`);
         const coursesRaw = await post('GetCourseListByType', { courseType: type });
         if (!Array.isArray(coursesRaw)) continue;
         const courses = coursesRaw.filter(c => c.key !== '0');
-        for (const course of courses) {
+        console.log(`[API] Found ${courses.length} courses for type ${type}`);
+
+        // Limit to first 3 courses for faster test
+        for (const course of courses.slice(0, 3)) {
+            console.log(`[API] Fetching batches for course: ${course.value} (${course.key})`);
             const batchesRaw = await post('GetCourseBatchListByCourse', {
                 course: course.key,
                 ExitExam: 'false',
@@ -57,6 +64,8 @@ async function scrapeApexInstitute() {
             });
             if (!Array.isArray(batchesRaw)) continue;
             const batches = batchesRaw.filter(b => b.key !== '0');
+            console.log(`[API] Found ${batches.length} batches for course ${course.value}`);
+
             for (const batch of batches) {
                 const dateMatch = batch.value.match(/(\d{1,2}\s\w+\s\d{4})\s*-\s*(\d{1,2}\s\w+\s\d{4})/);
                 let start = null, end = null;
@@ -71,7 +80,8 @@ async function scrapeApexInstitute() {
                     const feeData = await post('GetCourseFeeByCourseBatch', { batch: batch.key, type });
                     fee = parseFloat(feeData);
                     if (isNaN(fee)) fee = null;
-                } catch(e) {}
+                } catch(e) { console.warn(`Fee not found for batch ${batch.key}`); }
+
                 allBatches.push({
                     course_name: course.value,
                     batch_start_date: start,
@@ -79,12 +89,12 @@ async function scrapeApexInstitute() {
                     fees: fee,
                     seats_text: seatsText
                 });
-                await delay(2000);
+                await delay(1000);
             }
-            await delay(1000);
+            await delay(500);
         }
-        await delay(3000);
     }
+    console.log(`[APEX] Total batches collected: ${allBatches.length}`);
     return allBatches;
 }
 
@@ -98,6 +108,7 @@ async function main() {
         if (!batches.length) errorMsg = 'No batches found';
     } catch (err) {
         errorMsg = `${err.name}: ${err.message}`;
+        console.error(`[ERROR] ${errorMsg}`);
         status = 'error';
     }
     if (batches.length) {
