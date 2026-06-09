@@ -1,0 +1,22 @@
+name: Daily Scrape AIIMT
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: node worker.js
+        env:
+          WP_URL: ${{ secrets.WP_URL }}
+          WORKER_TOKEN: ${{ secrets.WORKER_TOKEN }}
