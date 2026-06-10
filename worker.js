@@ -30,22 +30,49 @@ async function logSync(instituteId, status, found, saved, error = '') {
     }
 }
 
-// Improved date parsing: tries multiple formats, falls back to a default future date
-function parseDateFromString(text) {
-    if (!text) return null;
-    // Try to extract a date in common formats: DD Mon YYYY, YYYY-MM-DD, DD-MM-YYYY
-    const patterns = [
-        /\b(\d{1,2}\s\w+\s\d{4})\b/,                 // 15 Jun 2026
-        /\b(\d{4}-\d{2}-\d{2})\b/,                   // 2026-06-15
-        /\b(\d{2}-\d{2}-\d{4})\b/                    // 15-06-2026
-    ];
-    for (const pattern of patterns) {
-        const match = text.match(pattern);
-        if (match) {
-            const date = new Date(match[1]);
-            if (!isNaN(date.getTime())) return date;
+// Convert month name (e.g., "Jun") to month number (0-11)
+function monthNameToNumber(monthName) {
+    const months = {
+        jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+        jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11
+    };
+    const lower = monthName.toLowerCase().substring(0,3);
+    return months[lower] ?? null;
+}
+
+// Parse a date string that may or may not contain a year
+function parseFlexibleDate(dateStr, defaultYear = null) {
+    if (!dateStr) return null;
+    // Try to match full format: DD Mon YYYY
+    let match = dateStr.match(/\b(\d{1,2})\s+(\w{3})\s+(\d{4})\b/);
+    if (match) {
+        const day = parseInt(match[1], 10);
+        const monthName = match[2];
+        const year = parseInt(match[3], 10);
+        const month = monthNameToNumber(monthName);
+        if (month !== null && !isNaN(day) && !isNaN(year)) {
+            return new Date(year, month, day);
         }
     }
+    // Try to match DD Mon (no year)
+    match = dateStr.match(/\b(\d{1,2})\s+(\w{3})\b/);
+    if (match) {
+        const day = parseInt(match[1], 10);
+        const monthName = match[2];
+        const month = monthNameToNumber(monthName);
+        if (month !== null && !isNaN(day)) {
+            let year = defaultYear !== null ? defaultYear : new Date().getFullYear();
+            let date = new Date(year, month, day);
+            // If the date is in the past, add one year
+            if (date < new Date()) {
+                date = new Date(year + 1, month, day);
+            }
+            return date;
+        }
+    }
+    // Fallback to generic Date parsing
+    const d = new Date(dateStr);
+    if (!isNaN(d.getTime())) return d;
     return null;
 }
 
@@ -87,35 +114,36 @@ async function scrapeApexInstitute() {
             console.log(`[API] Found ${batches.length} batches for course ${course.value}`);
 
             for (const batch of batches) {
-                // Attempt to parse start and end dates from the batch label
-                let start = null, end = null;
-                // First try two‑date pattern
-                const twoDates = batch.value.match(/(\d{1,2}\s\w+\s\d{4})\s*-\s*(\d{1,2}\s\w+\s\d{4})/);
-                if (twoDates) {
-                    start = new Date(twoDates[1]);
-                    end   = new Date(twoDates[2]);
+                const label = batch.value;
+                let startDate = null, endDate = null;
+
+                // Try to extract two dates: "DD Mon - DD Mon" or "DD Mon YYYY - DD Mon YYYY"
+                const twoDateMatch = label.match(/(\d{1,2}\s+\w{3}(?:\s+\d{4})?)\s*-\s*(\d{1,2}\s+\w{3}(?:\s+\d{4})?)/i);
+                if (twoDateMatch) {
+                    const startStr = twoDateMatch[1];
+                    const endStr = twoDateMatch[2];
+                    startDate = parseFlexibleDate(startStr);
+                    endDate = parseFlexibleDate(endStr, startDate ? startDate.getFullYear() : null);
                 } else {
-                    // Single date? Use it as start, and no end date
-                    const singleDate = parseDateFromString(batch.value);
+                    // Try single date
+                    const singleDate = parseFlexibleDate(label);
                     if (singleDate) {
-                        start = singleDate;
-                        end = null;
+                        startDate = singleDate;
+                        endDate = null;
                     }
                 }
 
-                // Fallback if still no start date
-                if (!start || isNaN(start.getTime())) {
-                    console.warn(`[WARN] Could not parse date from batch label: "${batch.value}". Using default date (30 days from now).`);
-                    start = new Date(defaultStart);
-                    end = null;
+                // Fallback if still no date
+                if (!startDate || isNaN(startDate.getTime())) {
+                    console.warn(`[WARN] Could not parse date from batch label: "${label}". Using default date (30 days from now).`);
+                    startDate = new Date(defaultStart);
+                    endDate = null;
                 }
 
-                // Ensure start is not in the past (if it is, move to future? but keep original for now)
-                // Convert to YYYY-MM-DD format
-                const startDateStr = start ? start.toISOString().slice(0,10) : null;
-                const endDateStr = end ? end.toISOString().slice(0,10) : null;
+                const startDateStr = startDate ? startDate.toISOString().slice(0,10) : null;
+                const endDateStr = endDate ? endDate.toISOString().slice(0,10) : null;
 
-                const seatsMatch = batch.value.match(/Avl\.\s*Seats[- ](\d+)/i);
+                const seatsMatch = label.match(/Avl\.\s*Seats[- ](\d+)/i);
                 let seatsText = seatsMatch ? `${seatsMatch[1]} seats left` : '';
 
                 let fee = null;
@@ -143,7 +171,7 @@ async function scrapeApexInstitute() {
 
 async function main() {
     console.log(`[START] ${new Date().toISOString()}`);
-    const instituteId = 1; // AIIMT's ID in your WordPress
+    const instituteId = 1;
     let batches = [], status = 'error', errorMsg = '';
     try {
         batches = await scrapeApexInstitute();
