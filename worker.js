@@ -30,7 +30,6 @@ async function logSync(instituteId, status, found, saved, error = '') {
     }
 }
 
-// Convert month name to number (0-11)
 function monthNameToNumber(monthName) {
     const months = {
         jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
@@ -40,40 +39,41 @@ function monthNameToNumber(monthName) {
     return months[key] ?? null;
 }
 
-// Parse a date string like "15 Jun" or "15 Jun 2026"
-function parseDate(dateStr, defaultYear = null) {
+function parseDateComponents(dateStr, defaultYear = null) {
     if (!dateStr) return null;
     const trimmed = dateStr.trim();
-    // Try with year: DD Mon YYYY
     let match = trimmed.match(/\b(\d{1,2})\s+(\w{3})\s+(\d{4})\b/i);
     if (match) {
         const day = parseInt(match[1], 10);
-        const month = monthNameToNumber(match[2]);
+        const monthName = match[2];
         const year = parseInt(match[3], 10);
+        const month = monthNameToNumber(monthName);
         if (month !== null && !isNaN(day) && !isNaN(year)) {
-            const d = new Date(year, month, day);
-            if (!isNaN(d.getTime())) return d;
+            return { year, month, day };
         }
     }
-    // Try without year: DD Mon
     match = trimmed.match(/\b(\d{1,2})\s+(\w{3})\b/i);
     if (match) {
         const day = parseInt(match[1], 10);
-        const month = monthNameToNumber(match[2]);
+        const monthName = match[2];
+        const month = monthNameToNumber(monthName);
         if (month !== null && !isNaN(day)) {
             let year = defaultYear !== null ? defaultYear : new Date().getFullYear();
-            let d = new Date(year, month, day);
-            // If the date is in the past (and not default year from range), try next year
-            if (d < new Date() && defaultYear === null) {
-                d = new Date(year + 1, month, day);
+            const testDate = new Date(year, month, day);
+            if (testDate < new Date() && defaultYear === null) {
+                year += 1;
             }
-            if (!isNaN(d.getTime())) return d;
+            return { year, month, day };
         }
     }
-    // Fallback: try generic Date parsing
-    const d = new Date(trimmed);
-    if (!isNaN(d.getTime())) return d;
     return null;
+}
+
+function componentsToDateString(year, month, day) {
+    const y = year.toString().padStart(4, '0');
+    const m = (month + 1).toString().padStart(2, '0');
+    const d = day.toString().padStart(2, '0');
+    return `${y}-${m}-${d}`;
 }
 
 async function scrapeApexInstitute() {
@@ -91,9 +91,6 @@ async function scrapeApexInstitute() {
         });
         return res.data;
     }
-
-    const defaultStart = new Date();
-    defaultStart.setDate(defaultStart.getDate() + 30); // 30 days from now
 
     for (const type of courseTypes) {
         console.log(`[API] Fetching courses for type: ${type}`);
@@ -115,44 +112,37 @@ async function scrapeApexInstitute() {
 
             for (const batch of batches) {
                 const label = batch.value;
-                let startDate = null, endDate = null;
+                let startComponents = null;
+                let endComponents = null;
 
-                // Extract date range: look for two date-like patterns separated by a dash
-                // Pattern matches "DD Mon - DD Mon" or "DD Mon YYYY - DD Mon YYYY"
                 const rangeMatch = label.match(/(\d{1,2}\s+\w{3}(?:\s+\d{4})?)\s*-\s*(\d{1,2}\s+\w{3}(?:\s+\d{4})?)/i);
                 if (rangeMatch) {
                     const startStr = rangeMatch[1];
                     const endStr = rangeMatch[2];
-                    // Try to parse; use the start date's year for the end if missing
-                    startDate = parseDate(startStr);
-                    if (startDate) {
-                        const startYear = startDate.getFullYear();
-                        endDate = parseDate(endStr, startYear);
-                        // If endDate is still null, try with default year
-                        if (!endDate) endDate = parseDate(endStr);
+                    startComponents = parseDateComponents(startStr);
+                    if (startComponents) {
+                        endComponents = parseDateComponents(endStr, startComponents.year);
                     } else {
-                        // fallback
-                        startDate = parseDate(startStr);
-                        endDate = parseDate(endStr);
+                        endComponents = parseDateComponents(endStr);
                     }
                 } else {
-                    // No range, try single date
-                    const singleDate = parseDate(label);
-                    if (singleDate) {
-                        startDate = singleDate;
-                        endDate = null;
+                    startComponents = parseDateComponents(label);
+                }
+
+                let startDateStr = null;
+                let endDateStr = null;
+
+                if (startComponents) {
+                    startDateStr = componentsToDateString(startComponents.year, startComponents.month, startComponents.day);
+                    if (endComponents) {
+                        endDateStr = componentsToDateString(endComponents.year, endComponents.month, endComponents.day);
                     }
+                } else {
+                    const fallback = new Date();
+                    fallback.setDate(fallback.getDate() + 30);
+                    startDateStr = fallback.toISOString().slice(0,10);
+                    console.warn(`[WARN] Could not parse date from batch label: "${label}". Using default date: ${startDateStr}`);
                 }
-
-                // Fallback if still no date
-                if (!startDate || isNaN(startDate.getTime())) {
-                    console.warn(`[WARN] Could not parse date from batch label: "${label}". Using default date (30 days from now).`);
-                    startDate = new Date(defaultStart);
-                    endDate = null;
-                }
-
-                const startDateStr = startDate ? startDate.toISOString().slice(0,10) : null;
-                const endDateStr = endDate ? endDate.toISOString().slice(0,10) : null;
 
                 const seatsMatch = label.match(/Avl\.\s*Seats[- ](\d+)/i);
                 let seatsText = seatsMatch ? `${seatsMatch[1]} seats left` : '';
