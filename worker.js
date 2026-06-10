@@ -30,48 +30,48 @@ async function logSync(instituteId, status, found, saved, error = '') {
     }
 }
 
-// Convert month name (e.g., "Jun") to month number (0-11)
+// Convert month name to number (0-11)
 function monthNameToNumber(monthName) {
     const months = {
         jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
         jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11
     };
-    const lower = monthName.toLowerCase().substring(0,3);
-    return months[lower] ?? null;
+    const key = monthName.toLowerCase().slice(0,3);
+    return months[key] ?? null;
 }
 
-// Parse a date string that may or may not contain a year
-function parseFlexibleDate(dateStr, defaultYear = null) {
+// Parse a date string like "15 Jun" or "15 Jun 2026"
+function parseDate(dateStr, defaultYear = null) {
     if (!dateStr) return null;
-    // Try to match full format: DD Mon YYYY
-    let match = dateStr.match(/\b(\d{1,2})\s+(\w{3})\s+(\d{4})\b/);
+    const trimmed = dateStr.trim();
+    // Try with year: DD Mon YYYY
+    let match = trimmed.match(/\b(\d{1,2})\s+(\w{3})\s+(\d{4})\b/i);
     if (match) {
         const day = parseInt(match[1], 10);
-        const monthName = match[2];
+        const month = monthNameToNumber(match[2]);
         const year = parseInt(match[3], 10);
-        const month = monthNameToNumber(monthName);
         if (month !== null && !isNaN(day) && !isNaN(year)) {
-            return new Date(year, month, day);
+            const d = new Date(year, month, day);
+            if (!isNaN(d.getTime())) return d;
         }
     }
-    // Try to match DD Mon (no year)
-    match = dateStr.match(/\b(\d{1,2})\s+(\w{3})\b/);
+    // Try without year: DD Mon
+    match = trimmed.match(/\b(\d{1,2})\s+(\w{3})\b/i);
     if (match) {
         const day = parseInt(match[1], 10);
-        const monthName = match[2];
-        const month = monthNameToNumber(monthName);
+        const month = monthNameToNumber(match[2]);
         if (month !== null && !isNaN(day)) {
             let year = defaultYear !== null ? defaultYear : new Date().getFullYear();
-            let date = new Date(year, month, day);
-            // If the date is in the past, add one year
-            if (date < new Date()) {
-                date = new Date(year + 1, month, day);
+            let d = new Date(year, month, day);
+            // If the date is in the past (and not default year from range), try next year
+            if (d < new Date() && defaultYear === null) {
+                d = new Date(year + 1, month, day);
             }
-            return date;
+            if (!isNaN(d.getTime())) return d;
         }
     }
-    // Fallback to generic Date parsing
-    const d = new Date(dateStr);
+    // Fallback: try generic Date parsing
+    const d = new Date(trimmed);
     if (!isNaN(d.getTime())) return d;
     return null;
 }
@@ -117,16 +117,27 @@ async function scrapeApexInstitute() {
                 const label = batch.value;
                 let startDate = null, endDate = null;
 
-                // Try to extract two dates: "DD Mon - DD Mon" or "DD Mon YYYY - DD Mon YYYY"
-                const twoDateMatch = label.match(/(\d{1,2}\s+\w{3}(?:\s+\d{4})?)\s*-\s*(\d{1,2}\s+\w{3}(?:\s+\d{4})?)/i);
-                if (twoDateMatch) {
-                    const startStr = twoDateMatch[1];
-                    const endStr = twoDateMatch[2];
-                    startDate = parseFlexibleDate(startStr);
-                    endDate = parseFlexibleDate(endStr, startDate ? startDate.getFullYear() : null);
+                // Extract date range: look for two date-like patterns separated by a dash
+                // Pattern matches "DD Mon - DD Mon" or "DD Mon YYYY - DD Mon YYYY"
+                const rangeMatch = label.match(/(\d{1,2}\s+\w{3}(?:\s+\d{4})?)\s*-\s*(\d{1,2}\s+\w{3}(?:\s+\d{4})?)/i);
+                if (rangeMatch) {
+                    const startStr = rangeMatch[1];
+                    const endStr = rangeMatch[2];
+                    // Try to parse; use the start date's year for the end if missing
+                    startDate = parseDate(startStr);
+                    if (startDate) {
+                        const startYear = startDate.getFullYear();
+                        endDate = parseDate(endStr, startYear);
+                        // If endDate is still null, try with default year
+                        if (!endDate) endDate = parseDate(endStr);
+                    } else {
+                        // fallback
+                        startDate = parseDate(startStr);
+                        endDate = parseDate(endStr);
+                    }
                 } else {
-                    // Try single date
-                    const singleDate = parseFlexibleDate(label);
+                    // No range, try single date
+                    const singleDate = parseDate(label);
                     if (singleDate) {
                         startDate = singleDate;
                         endDate = null;
