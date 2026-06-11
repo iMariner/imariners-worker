@@ -56,9 +56,9 @@ async function fetchInstitutes() {
 // ========== GENERIC APEX SCRAPER (works for any Appexonline institute) ==========
 async function scrapeApexInstitute(inst) {
     console.log(`[APEX] Scraping ${inst.name} (ID: ${inst.id}) – URL: ${inst.source_url}`);
-    // Extract base URL (remove trailing /booking or /Booking if present)
-    let base = inst.source_url.replace(/\/booking\/?$/i, '').replace(/\/$/, '');
-    // Ensure the path includes /booking/Booking (the required API endpoint prefix)
+    // FIXED: Remove trailing slash only, keep the base URL as provided by institute
+    let base = inst.source_url.replace(/\/$/i, '');
+    // Add the API endpoint path
     const apiBase = `${base}/booking/Booking`;
     const allBatches = [];
     const courseTypes = ['DG Course', 'Value Added Course'];
@@ -158,7 +158,7 @@ async function scrapeApexInstitute(inst) {
     return allBatches;
 }
 
-// ========== PLACEHOLDER SCRAPERS FOR OTHER SOURCE TYPES ==========
+// ========== PLACEHOLDER SCRAPERs FOR OTHER SOURCE TYPES ==========
 async function scrapeSimpleHtml(inst) {
     console.warn(`[WARN] simple_html scraper not implemented yet for ${inst.name}`);
     return [];
