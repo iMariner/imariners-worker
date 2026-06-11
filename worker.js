@@ -56,10 +56,11 @@ async function fetchInstitutes() {
 // ========== GENERIC APEX SCRAPER (works for any Appexonline institute) ==========
 async function scrapeApexInstitute(inst) {
     console.log(`[APEX] Scraping ${inst.name} (ID: ${inst.id}) – URL: ${inst.source_url}`);
-    // FIXED: Remove trailing slash only, keep the base URL as provided by institute
-    let base = inst.source_url.replace(/\/$/i, '');
-    // Add the API endpoint path
-    const apiBase = `${base}/booking/Booking`;
+    
+    // FIXED: Remove trailing /booking or /Booking from URL, then add /Booking.aspx
+    let base = inst.source_url.replace(/\/Booking$/i, '').replace(/\/booking$/i, '').replace(/\/$/i, '');
+    const apiBase = `${base}/booking/Booking.aspx`;
+    
     const allBatches = [];
     const courseTypes = ['DG Course', 'Value Added Course'];
 
