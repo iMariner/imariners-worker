@@ -57,18 +57,23 @@ async function fetchInstitutes() {
 async function scrapeApexInstitute(inst) {
     console.log(`[APEX] Scraping ${inst.name} (ID: ${inst.id}) – URL: ${inst.source_url}`);
     
-    // FIXED: Remove trailing /booking or /Booking from URL, then add /Booking.aspx
-    let base = inst.source_url.replace(/\/Booking$/i, '').replace(/\/booking$/i, '').replace(/\/$/i, '');
-    const apiBase = `${base}/booking/Booking.aspx`;
+    // FIXED: Use exact URL from institute + /Booking endpoint (no .aspx)
+    let base = inst.source_url.replace(/\/$/i, '');
+    const apiBase = `${base}/Booking`;
     
     const allBatches = [];
     const courseTypes = ['DG Course', 'Value Added Course'];
 
     async function post(endpoint, data) {
         const form = new URLSearchParams(data).toString();
-        console.log(`[API] Calling ${endpoint} with ${JSON.stringify(data)}`);
+        console.log(`[API] Calling ${apiBase}/${endpoint} with ${JSON.stringify(data)}`);
+        
         const res = await axios.post(`${apiBase}/${endpoint}`, form, {
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Accept': '*/*',
+                'User-Agent': 'axios/1.6.2'
+            },
             timeout: 15000
         });
         return res.data;
@@ -105,6 +110,7 @@ async function scrapeApexInstitute(inst) {
             coursesRaw = await post('GetCourseListByType', { courseType: type });
         } catch (e) {
             console.error(`[APEX ERROR] Could not fetch courses for type ${type}:`, e.message);
+            console.error(`[DEBUG] Full error:`, e);
             continue;
         }
         if (!Array.isArray(coursesRaw)) continue;
