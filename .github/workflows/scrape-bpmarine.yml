@@ -1,1 +1,67 @@
+name: Scrape BP Marine Academy
 
+on:
+  schedule:
+    # Runs at 1:00 AM UTC (6:30 AM IST) and 1:00 PM UTC (6:30 PM IST)
+    - cron: '0 1,13 * * *'
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Playwright (Python package)
+        run: pip install playwright
+
+      - name: Get installed Playwright version
+        id: pw-version
+        run: echo "version=$(pip show playwright | grep -i '^Version' | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
+        # Keying on the *actually installed* version (read back above, not
+        # hardcoded) means this cache can never go stale/mismatched even if
+        # a future run picks up a newer Playwright release -- it'll just get
+        # a fresh cache key and download once for that new version.
+
+      - name: Install Chromium browser
+        run: playwright install chromium --with-deps
+        # Unchanged command/flag order from before. Playwright itself already
+        # skips re-downloading a browser binary that's already present in
+        # ~/.cache/ms-playwright, so on a cache hit this step mainly just
+        # verifies/installs OS-level libs (fast) instead of re-fetching the
+        # browser (the large download).
+      
+      - name: Run BP Marine scraper
+        run: python bpmarine_scraper.py
+      
+      - name: Push data to WordPress
+        env:
+          WP_URL: ${{ secrets.WP_URL }}
+          WORKER_TOKEN: ${{ secrets.WORKER_TOKEN }}
+        run: |
+          curl -X POST "${WP_URL}/wp-json/imcfi/v1/ingest-bpmarine" \
+            -H "X-IMCFI-Token: ${WORKER_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data @bpmarine_courses.json
+      
+      - name: Upload artifacts (for debugging if fails)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bpmarine-scrape-output
+          path: |
+            bpmarine_courses.json
+            bpmarine_courses.csv
