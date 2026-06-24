@@ -1,0 +1,56 @@
+name: Scrape AppEx UI-driven institutes
+
+# Covers every institute in INSTITUTE_CONFIGS inside appex_ui_scraper.py.
+# Adding a new institute to that config does NOT need a new workflow.
+
+on:
+  schedule:
+    - cron: '30 1,13 * * *'   # 7:00 AM & 7:00 PM IST
+  workflow_dispatch:
+    inputs:
+      only:
+        description: 'Optional: run a single institute slug (e.g. ts-rahaman)'
+        required: false
+        default: ''
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install playwright
+          playwright install chromium --with-deps
+
+      - name: Run AppEx UI scraper
+        run: |
+          if [ -n "${{ github.event.inputs.only }}" ]; then
+            python appex_ui_scraper.py --only "${{ github.event.inputs.only }}"
+          else
+            python appex_ui_scraper.py
+          fi
+
+      - name: Push data to WordPress
+        env:
+          WP_URL: ${{ secrets.WP_URL }}
+          WORKER_TOKEN: ${{ secrets.WORKER_TOKEN }}
+        run: |
+          curl -X POST "${WP_URL}/wp-json/imcfi/v1/ingest-appex-ui" \
+            -H "X-IMCFI-Token: ${WORKER_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data @appex_ui_courses.json
+
+      - name: Upload artifacts (for debugging if fails)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: appex-ui-scrape-output
+          path: appex_ui_courses.json
