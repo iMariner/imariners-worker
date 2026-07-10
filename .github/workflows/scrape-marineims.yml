@@ -1,0 +1,38 @@
+name: Scrape MarineIMS (IMS X7) Institutes
+
+on:
+  schedule:
+    # Runs at 1:30 AM UTC (7:00 AM IST) and 1:30 PM UTC (7:00 PM IST)
+    - cron: '30 1,13 * * *'
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run MarineIMS scraper (scrapes + pushes to WordPress)
+        env:
+          IMCFI_INGEST_URL: https://imariners.com/wp-json/imcfi/v1/ingest-marineims
+          WORKER_TOKEN: ${{ secrets.WORKER_TOKEN }}
+        run: python marineims_scraper.py
+
+      - name: Upload artifacts (for debugging if fails)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: marineims-scrape-output
+          path: |
+            marineims_courses.json
+            marineims_courses.csv
