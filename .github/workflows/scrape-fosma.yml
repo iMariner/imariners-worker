@@ -1,0 +1,38 @@
+name: Scrape FOSMA Institute (fosma.net)
+
+on:
+  schedule:
+    # Runs at 2:00 AM UTC (7:30 AM IST) and 2:00 PM UTC (7:30 PM IST)
+    - cron: '0 2,14 * * *'
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run FOSMA scraper (scrapes + pushes to WordPress)
+        env:
+          IMCFI_INGEST_URL: https://imariners.com/wp-json/imcfi/v1/ingest-fosma
+          WORKER_TOKEN: ${{ secrets.WORKER_TOKEN }}
+        run: python fosma_scraper.py
+
+      - name: Upload artifacts (for debugging if fails)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fosma-scrape-output
+          path: |
+            fosma_courses.json
+            fosma_courses.csv
