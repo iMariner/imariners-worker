@@ -9,9 +9,12 @@ Config-driven like appex_ui_scraper.py: add another dict to INSTITUTE_CONFIGS
 to onboard a new marineims.com institute -- no new script needed.
 
 Flow per institute:
-  1. GET  /register                       -> scrape csrf-token meta tag, keep cookies
-  2. POST /getcourses/typeoptionwise       (type=All) -> full course catalog incl. fees
-  3. POST /frontendbooking/getbatchlist    (course=<id>) for each course -> batch rows
+  1. GET  {base_url}{register_path}         -> scrape csrf-token meta tag, keep cookies
+  2. POST /getcourses/typeoptionwise        (type=All) -> full course catalog incl. fees
+  3. POST /frontendbooking/getbatchlist     (course=<id>) for each course -> batch rows
+
+register_path defaults to "/register" but some institutes on this platform
+use "/course/register" instead -- override per-config as needed.
 
 Output: one JSON array of "groups" (one dict per institute) posted to
 /wp-json/imcfi/v1/ingest-marineims, matching ingest-marineims.php's expected
@@ -38,6 +41,67 @@ INSTITUTE_CONFIGS = [
         "base_url": "https://cmet.marineims.com",
         "source_url": "https://cmet.marineims.com",
     },
+    {
+        # Matches wp-admin institute id 88, "MTI" (Shipping Corporation of
+        # India's Maritime Training Institute -- site itself is branded
+        # "Shipping Corporation of India Land and Assets Ltd").
+        "slug": "mti",
+        "name": "MTI",
+        "base_url": "https://sci.marineims.com",
+        "register_path": "/register",
+        "source_url": "https://sci.marineims.com/register",
+    },
+    {
+        # Matches wp-admin institute id 142, "Seven Islands Maritime
+        # Training Institute".
+        "slug": "seven-islands-maritime-training-institute",
+        "name": "Seven Islands Maritime Training Institute",
+        "base_url": "https://sis.marineims.com",
+        "register_path": "/register/",
+        "source_url": "https://sis.marineims.com/register/",
+    },
+    {
+        # Matches wp-admin institute id 156, "The Institute of Marine
+        # Engineers(India)" -- Mumbai centre. Uses /course/register instead
+        # of /register for the CSRF-bearing page.
+        "slug": "the-institute-of-marine-engineers-india",
+        "name": "The Institute of Marine Engineers(India)",
+        "base_url": "https://imeimum.marineims.com",
+        "register_path": "/course/register",
+        "source_url": "https://imeimum.marineims.com/course/register",
+    },
+    {
+        # Matches wp-admin institute id 146, "Sriram Institute of Marine
+        # Studies".
+        "slug": "sriram-institute-of-marine-studies",
+        "name": "Sriram Institute of Marine Studies",
+        "base_url": "https://sims.marineims.com",
+        "register_path": "/register",
+        "source_url": "https://sims.marineims.com/register",
+    },
+    {
+        # Matches wp-admin institute id 71, "Institute of Marine
+        # Engineers(India) Cochin" -- Kochi centre. Also uses /course/register.
+        "slug": "institute-of-marine-engineers-india-cochin",
+        "name": "Institute of Marine Engineers(India) Cochin",
+        "base_url": "https://imeikochi.marineims.com",
+        "register_path": "/course/register",
+        "source_url": "https://imeikochi.marineims.com/course/register",
+    },
+    {
+        # Matches wp-admin institute id 171, "Zasha Institute of Maritime
+        # Studies" (site itself is branded "Zasha Institute of Maritime
+        # Studies (ZIMS) - Dehradun"). Note: a second, separately-curated
+        # institute row "ZASHA MARITIME EDUCATION AND RESEARCH" (id 170)
+        # also exists in wp-admin with the same contact email -- that is a
+        # different record (likely the trust/legal name) and is NOT the one
+        # this scraper should update.
+        "slug": "zasha-institute-of-maritime-studies",
+        "name": "Zasha Institute of Maritime Studies",
+        "base_url": "https://zasha.marineims.com",
+        "register_path": "/register",
+        "source_url": "https://zasha.marineims.com/register",
+    },
     # Add more marineims.com institutes here as they're onboarded. Always
     # check wp-admin's Institutes page first for an existing DG-approved
     # entry and reuse its slug -- never invent a new slug for an institute
@@ -48,12 +112,12 @@ WP_INGEST_URL = os.environ.get("IMCFI_INGEST_URL", "https://imariners.com/wp-jso
 WORKER_TOKEN = os.environ.get("WORKER_TOKEN", "")
 
 
-def get_csrf_and_session(session, base_url):
-    r = session.get(f"{base_url}/register", timeout=30)
+def get_csrf_and_session(session, base_url, register_path):
+    r = session.get(f"{base_url}{register_path}", timeout=30)
     r.raise_for_status()
     m = re.search(r'name="csrf-token" content="([^"]+)"', r.text)
     if not m:
-        raise RuntimeError(f"Could not find csrf-token on {base_url}/register")
+        raise RuntimeError(f"Could not find csrf-token on {base_url}{register_path}")
     return m.group(1)
 
 
@@ -68,8 +132,9 @@ def post_form(session, base_url, path, token, fields):
 def scrape_institute(cfg):
     session = requests.Session()
     base_url = cfg["base_url"]
+    register_path = cfg.get("register_path", "/register")
     print(f"[{cfg['slug']}] fetching csrf token...", flush=True)
-    token = get_csrf_and_session(session, base_url)
+    token = get_csrf_and_session(session, base_url, register_path)
 
     print(f"[{cfg['slug']}] fetching course catalog...", flush=True)
     courses_resp = post_form(session, base_url, "/getcourses/typeoptionwise", token, {"type": "All"})
