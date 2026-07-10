@@ -28,12 +28,20 @@ import requests
 
 INSTITUTE_CONFIGS = [
     {
-        "slug": "cmet-lucknow",
-        "name": "Centre for Maritime Education and Training Lucknow",
+        # slug MUST match the existing DG-approved institute's slug in
+        # wp_imcfi_institutes exactly, so the ingest endpoint updates that
+        # record in place instead of creating a duplicate. This institute
+        # was manually curated from the DG Shipping approved list -- do not
+        # change this slug without also renaming the institute in wp-admin.
+        "slug": "centre-for-maritime-education-and-training",
+        "name": "Centre for Maritime Education And Training",
         "base_url": "https://cmet.marineims.com",
         "source_url": "https://cmet.marineims.com",
     },
-    # Add more marineims.com institutes here as they're onboarded.
+    # Add more marineims.com institutes here as they're onboarded. Always
+    # check wp-admin's Institutes page first for an existing DG-approved
+    # entry and reuse its slug -- never invent a new slug for an institute
+    # that's already manually curated there.
 ]
 
 WP_INGEST_URL = os.environ.get("IMCFI_INGEST_URL", "https://imariners.com/wp-json/imcfi/v1/ingest-marineims")
