@@ -1,39 +1,42 @@
 """
 Scraper for fosma.net (FOSMA Maritime Institute & Research Organisation --
-Noida and Kolkata centres). This is a classic session-based ASP.NET MVC app,
-not a JSON API, so the flow is a bit more involved than marineims.com but
-still needs no browser automation (Playwright) -- plain requests + a
-persistent session/cookie jar is enough.
+Noida and Kolkata centres, each with its own wp_imcfi_institutes row).
+Classic session-based ASP.NET MVC app, not a JSON API -- needs no browser
+automation (Playwright), plain requests + a persistent session/cookie jar
++ BeautifulSoup for parsing is enough.
 
-Flow:
-  1. GET  /CourseBooking/FosmaInstitute
-     -> server-rendered page listing BOTH institutes' ongoing/future batches
-        (course name, category, batch code, date range). No fees here.
-        Reliable section boundaries in the rendered text are the phrases
-        "View Noida Batches" / "View Kolkata Batches" (NOT the "NOIDA"/
-        "KOLKATA" toggle-button labels, which are mislabeled/reversed).
-  2. For each institute, POST institute=NOIDA|KOLKATA to the same URL to
-     select it in session (kept for parity with the site's own flow; the
-     batch listing itself is not actually institute-scoped server-side).
-  3. Walk the "Select Program" list: POST item.ApId/item.ApTypeId to
-     /CourseBooking/FosmaPrograms, then GET
-     /CourseBooking/CourseBatches/OnGoing and pull the hidden fields
-     item.Fees / item.FemaleDiscount / item.GenericDiscount out of the form.
-     Fee is a per-program attribute, constant across all of that program's
-     batches -- NOT per batch, NOT per institute.
-  4. Fuzzy-match (token overlap ratio, threshold 0.5) each batch's course
-     name against the ~23 program names that have fee data. Batches with no
-     match simply have no fee -- normal "Contact Institute" fallback for
-     roughly a quarter of batches whose course isn't in the bookable
-     program list, this is expected, not a bug.
-  5. Post one combined JSON array (one group per institute) to
+Flow per institute:
+  1. POST institute=NOIDA|KOLKATA to /CourseBooking/FosmaInstitute to select
+     it in session.
+  2. GET /CourseBooking/FosmaPrograms -- this "Select Program" list IS
+     institute-specific (Noida has 23 bookable programs, Kolkata has 32),
+     unlike the batch listing below which shows both institutes at once.
+     Each program is its own tiny <form> containing hidden
+     item.ApId / item.ApTypeId inputs and a submit button whose value is
+     the program name.
+  3. For each program: POST item.ApId/item.ApTypeId to FosmaPrograms, then
+     GET /CourseBooking/CourseBatches/OnGoing and scrape the hidden
+     item.Fees / item.FemaleDiscount fields. Fee is a per-program
+     attribute, constant across all of that program's batches.
+  4. GET /CourseBooking/FosmaInstitute again -- this single page renders
+     BOTH institutes' on-going/future batches at once. Reliable section
+     boundaries are the literal phrases "View Noida Batches" / "View
+     Kolkata Batches" (NOT the "NOIDA"/"KOLKATA" toggle-button labels,
+     which are mislabeled/reversed). We slice the raw HTML string at
+     those markers and parse each half separately with BeautifulSoup --
+     each batch is a "div.row1 > div.card.bg-light.mb-3" containing
+     "Batch: <code> ... Duration <start> - <end>"; the course name is the
+     nearest preceding non-batch sibling div's text (course name and
+     category div immediately precede the first batch of a course; later
+     batches of the same course have no repeated header).
+  5. Fuzzy-match (token overlap ratio, threshold 0.5) each batch's course
+     name against that institute's own fee map. Batches with no match
+     simply have no fee -- normal "Contact Institute" fallback, expected
+     for courses not in the bookable "Select Program" list, not a bug.
+  6. Post one combined JSON array (one group per institute) to
      /wp-json/imcfi/v1/ingest-fosma, matching ingest-fosma.php's shape,
-     with fees=FULL fee only (female_discount_pct passed through as
-     metadata, never used to reduce the fee).
-
-Config-driven like the other *_scraper.py files: add another dict to
-INSTITUTE_CONFIGS to onboard more fosma.net centres. slug MUST match the
-existing DG-approved institute's slug in wp_imcfi_institutes exactly.
+     fees=FULL fee only (female_discount_pct passed through as metadata,
+     never used to reduce the fee).
 """
 
 import json
@@ -41,9 +44,9 @@ import csv
 import os
 import re
 import sys
-from datetime import datetime
 
 import requests
+from bs4 import BeautifulSoup
 
 BASE_URL = "https://fosma.net"
 
@@ -53,39 +56,41 @@ INSTITUTE_CONFIGS = [
         "name": "Fosma Maritime Institute & Research Organisation",
         "session_value": "NOIDA",
         "section_marker": "View Noida Batches",
-        "next_marker": "View Kolkata Batches",
-        "source_url": f"{BASE_URL}/CourseBooking/FosmaInstitute",
     },
-    # Kolkata centre has its own separate wp_imcfi_institutes row
-    # ("Fosma Maritime Institute & Research Organisation (Kol)") -- out of
-    # scope for this run per Ajit's Noida-specific request, but the config
-    # below is ready if/when that centre needs onboarding too:
-    # {
-    #     "slug": "fosma-maritime-institute-research-organisation-kol",
-    #     "name": "Fosma Maritime Institute & Research Organisation (Kol)",
-    #     "session_value": "KOLKATA",
-    #     "section_marker": "View Kolkata Batches",
-    #     "next_marker": None,
-    #     "source_url": f"{BASE_URL}/CourseBooking/FosmaInstitute",
-    # },
+    {
+        "slug": "fosma-maritime-institute-research-organisation-kol",
+        "name": "Fosma Maritime Institute & Research Organisation (Kol)",
+        "session_value": "KOLKATA",
+        "section_marker": "View Kolkata Batches",
+    },
+    # Add more fosma.net centres here as they're onboarded. Always check
+    # wp-admin's Institutes page first for an existing DG-approved entry
+    # and reuse its slug -- never invent a new slug for an institute
+    # that's already manually curated there.
 ]
 
 WP_INGEST_URL = os.environ.get("IMCFI_INGEST_URL", "https://imariners.com/wp-json/imcfi/v1/ingest-fosma")
 WORKER_TOKEN = os.environ.get("WORKER_TOKEN", "")
+SOURCE_URL = f"{BASE_URL}/CourseBooking/FosmaInstitute"
 
 MONTHS = {
-    "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
-    "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
 }
+
+BATCH_RE = re.compile(
+    r"Batch:\s*(.*?)\s*Duration\s*(\d{1,2}\s+[A-Za-z]{3,}\s+\d{4})\s*-\s*(\d{1,2}\s+[A-Za-z]{3,}\s+\d{4})",
+    re.S,
+)
 
 
 def parse_date(txt):
     """'07 Jul 2026' -> '2026-07-07'"""
-    m = re.match(r"(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})", txt.strip())
+    m = re.match(r"(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{4})", txt.strip())
     if not m:
         return None
     day, mon, year = m.groups()
-    month = MONTHS.get(mon[:3].title())
+    month = MONTHS.get(mon[:3].lower())
     if not month:
         return None
     return f"{year}-{month:02d}-{int(day):02d}"
@@ -96,8 +101,8 @@ def tokenize(name):
 
 
 def fuzzy_match(course_name, fee_map):
-    """Token-overlap-ratio match against the fee-bearing program list.
-    Returns the best fee entry if overlap ratio >= 0.5, else None."""
+    """Token-overlap-ratio match against the fee-bearing program list for
+    THIS institute. Returns the best fee entry if overlap ratio >= 0.5."""
     tokens = tokenize(course_name)
     if not tokens:
         return None
@@ -113,121 +118,126 @@ def fuzzy_match(course_name, fee_map):
     return best_entry if best_score >= 0.5 else None
 
 
-def get_program_list(session):
-    """GET the FosmaPrograms page and parse out {apId, apTypeId, name}
-    from the Select Program dropdown's <option> tags."""
+def get_program_fee_map(session):
+    """GET the FosmaPrograms page (institute-specific list) and walk each
+    program to collect its fee/discount fields."""
     r = session.get(f"{BASE_URL}/CourseBooking/FosmaPrograms", timeout=30)
     r.raise_for_status()
-    # Options look like: <option value="3|2">Second Mate Competency</option>
+    soup = BeautifulSoup(r.text, "html.parser")
+
     programs = []
-    for m in re.finditer(r'<option\s+value="(\d+)\|(\d+)"[^>]*>([^<]+)</option>', r.text):
-        ap_id, ap_type_id, name = m.groups()
-        programs.append({"apId": ap_id, "apTypeId": ap_type_id, "name": name.strip()})
-    return programs
+    for form in soup.find_all("form"):
+        ap_id_input = form.find("input", id="item_ApId")
+        if not ap_id_input:
+            continue
+        ap_type_input = form.find("input", id="item_ApTypeId")
+        submit_input = form.find("input", attrs={"type": "submit"})
+        programs.append({
+            "apId": ap_id_input.get("value"),
+            "apTypeId": ap_type_input.get("value") if ap_type_input else None,
+            "name": (submit_input.get("value") or "").strip() if submit_input else "",
+        })
+
+    fee_map = []
+    for p in programs:
+        session.post(
+            f"{BASE_URL}/CourseBooking/FosmaPrograms",
+            data={"item.ApId": p["apId"], "item.ApTypeId": p["apTypeId"]},
+            timeout=30,
+        )
+        r2 = session.get(f"{BASE_URL}/CourseBooking/CourseBatches/OnGoing", timeout=30)
+        fee_m = re.search(r'name="item\.Fees"[^>]*value="([^"]*)"', r2.text)
+        fem_m = re.search(r'name="item\.FemaleDiscount"[^>]*value="([^"]*)"', r2.text)
+        fee_map.append({
+            "name": p["name"],
+            "fees": fee_m.group(1) if fee_m else None,
+            "female_discount": fem_m.group(1) if fem_m else None,
+        })
+    return fee_map
 
 
-def get_fee_for_program(session, program):
-    """POST the program selection, then GET OnGoing and scrape hidden
-    item.Fees / item.FemaleDiscount / item.GenericDiscount fields."""
-    session.post(
-        f"{BASE_URL}/CourseBooking/FosmaPrograms",
-        data={"item.ApId": program["apId"], "item.ApTypeId": program["apTypeId"]},
-        timeout=30,
-    )
-    r = session.get(f"{BASE_URL}/CourseBooking/CourseBatches/OnGoing", timeout=30)
-    r.raise_for_status()
+def parse_institute_section(full_html, section_marker, next_marker=None):
+    """Slice the raw FosmaInstitute HTML at the given marker phrase and
+    parse the batch cards + preceding course-name headers within that
+    slice. Returns a list of {category, course_name, batch_code,
+    start_raw, end_raw}."""
+    start_idx = full_html.find(section_marker)
+    if start_idx == -1:
+        return []
+    if next_marker:
+        end_idx = full_html.find(next_marker, start_idx)
+        fragment = full_html[start_idx:end_idx] if end_idx != -1 else full_html[start_idx:]
+    else:
+        fragment = full_html[start_idx:]
 
-    def hidden(field):
-        m = re.search(rf'name="{re.escape(field)}"[^>]*value="([^"]*)"', r.text)
-        return m.group(1) if m else None
+    soup = BeautifulSoup(fragment, "html.parser")
+    all_divs = soup.find_all("div")
 
-    return {
-        "name": program["name"],
-        "fees": hidden("item.Fees"),
-        "female_discount": hidden("item.FemaleDiscount"),
-        "generic_discount": hidden("item.GenericDiscount"),
-    }
+    results = []
+    last_texts = []
+    for div in all_divs:
+        classes = div.get("class") or []
+        if "row1" in classes:
+            card = div.find("div", class_=lambda c: c and "card" in c and "bg-light" in c)
+            if not card:
+                continue
+            card_text = re.sub(r"\s+", " ", card.get_text(" ", strip=True))
+            m = BATCH_RE.search(card_text)
+            if not m:
+                continue
+            results.append({
+                "category": last_texts[0] if len(last_texts) > 0 else "",
+                "course_name": last_texts[1] if len(last_texts) > 1 else (last_texts[0] if last_texts else ""),
+                "batch_code": m.group(1).strip(),
+                "start_raw": m.group(2),
+                "end_raw": m.group(3),
+            })
+        else:
+            # Only consider leaf divs (no nested div children) as header
+            # text candidates -- this avoids double-counting the same
+            # header text once for an outer wrapper div and again for an
+            # inner text div, which would otherwise push the real
+            # category/course-name out of the 2-slot rolling buffer below.
+            if div.find("div"):
+                continue
+            text = re.sub(r"\s+", " ", div.get_text(" ", strip=True))
+            if text:
+                last_texts.append(text)
+                if len(last_texts) > 2:
+                    last_texts.pop(0)
 
-
-def parse_batches(section_text):
-    """Parse the rendered batch listing text for one institute's section.
-    Each batch block looks roughly like:
-      <Category>
-      <Course Name>
-      <Batch Code>
-      <DD Mon YYYY> - <DD Mon YYYY>
-      Status (Ongoing/Upcoming)
-    This mirrors the state-machine parsing done live in-browser against
-    document.body.innerText; adapt field regexes here if fosma.net changes
-    its markup/wording.
-    """
-    batches = []
-    date_range_re = re.compile(r"(\d{1,2}\s+[A-Za-z]{3}\s+\d{4})\s*-\s*(\d{1,2}\s+[A-Za-z]{3}\s+\d{4})")
-    lines = [ln.strip() for ln in section_text.splitlines() if ln.strip()]
-
-    i = 0
-    current_category = None
-    current_course = None
-    while i < len(lines):
-        line = lines[i]
-        date_match = date_range_re.search(line)
-        if date_match:
-            start = parse_date(date_match.group(1))
-            end = parse_date(date_match.group(2))
-            # Batch code is usually the line just before the date range
-            batch_code = lines[i - 1] if i > 0 else ""
-            status = "active"
-            if i + 1 < len(lines) and re.search(r"upcoming|future", lines[i + 1], re.I):
-                status = "future"
-            if current_course and start:
-                batches.append({
-                    "category": current_category or "",
-                    "course_name": current_course,
-                    "batch_code": batch_code,
-                    "start_date": start,
-                    "end_date": end,
-                    "batch_status": status,
-                })
-        elif re.match(r"^(Pre[- ]?Sea|Post[- ]?Sea|STCW|GME|DG Shipping|Simulator|Refresher)", line, re.I):
-            current_category = line
-        elif not date_match and len(line) > 3 and not re.match(r"^(Ongoing|Upcoming|Status|View)", line, re.I):
-            # Heuristic: treat a standalone line as a course name if it's
-            # not a status/category/nav marker and doesn't look like a code
-            if not re.match(r"^[A-Z0-9/.\-]+$", line):
-                current_course = line
-        i += 1
-
-    return batches
+    return results
 
 
-def scrape_institute(cfg, program_fee_map):
+def scrape_institute(cfg, all_markers):
     session = requests.Session()
-    print(f"[{cfg['slug']}] fetching FosmaInstitute batch listing...", flush=True)
+    print(f"[{cfg['slug']}] selecting institute + fetching program/fee list...", flush=True)
 
     session.post(
         f"{BASE_URL}/CourseBooking/FosmaInstitute",
         data={"institute": cfg["session_value"]},
         timeout=30,
     )
+
+    fee_map = get_program_fee_map(session)
+    print(f"[{cfg['slug']}] {len(fee_map)} programs/fees fetched", flush=True)
+
     r = session.get(f"{BASE_URL}/CourseBooking/FosmaInstitute", timeout=30)
     r.raise_for_status()
 
-    text = re.sub(r"<[^>]+>", "\n", r.text)  # crude tag-strip to approximate rendered text
-    start_idx = text.find(cfg["section_marker"])
-    end_idx = text.find(cfg["next_marker"]) if cfg.get("next_marker") else -1
-    if start_idx == -1:
-        print(f"[{cfg['slug']}] WARNING: section marker '{cfg['section_marker']}' not found", flush=True)
-        section_text = text
-    else:
-        section_text = text[start_idx:end_idx] if end_idx != -1 else text[start_idx:]
-
-    raw_batches = parse_batches(section_text)
+    idx = all_markers.index(cfg["section_marker"])
+    next_marker = all_markers[idx + 1] if idx + 1 < len(all_markers) else None
+    raw_batches = parse_institute_section(r.text, cfg["section_marker"], next_marker)
     print(f"[{cfg['slug']}] {len(raw_batches)} batches parsed", flush=True)
 
     batches = []
     unmatched = 0
     for b in raw_batches:
-        fee_entry = fuzzy_match(b["course_name"], program_fee_map)
+        start = parse_date(b["start_raw"])
+        end = parse_date(b["end_raw"])
+        if not start:
+            continue
+        fee_entry = fuzzy_match(b["course_name"], fee_map)
         fees = None
         female_discount_pct = None
         if fee_entry and fee_entry.get("fees"):
@@ -246,9 +256,9 @@ def scrape_institute(cfg, program_fee_map):
             "course_name": b["course_name"],
             "category": b["category"],
             "batch_code": b["batch_code"],
-            "start_date": b["start_date"],
-            "end_date": b["end_date"],
-            "batch_status": b["batch_status"],
+            "start_date": start,
+            "end_date": end,
+            "batch_status": "active",
             "fees": fees,  # FULL fee -- never the discounted women's rate
             "female_discount_pct": female_discount_pct,
         })
@@ -258,7 +268,7 @@ def scrape_institute(cfg, program_fee_map):
     return {
         "institute_slug": cfg["slug"],
         "institute_name": cfg["name"],
-        "source_url": cfg["source_url"],
+        "source_url": SOURCE_URL,
         "batches": batches,
     }
 
@@ -268,22 +278,12 @@ def main():
         print("ERROR: WORKER_TOKEN env var not set", flush=True)
         sys.exit(1)
 
-    session = requests.Session()
-    print("Fetching program list + fees from FosmaPrograms...", flush=True)
-    programs = get_program_list(session)
-    print(f"{len(programs)} selectable programs found", flush=True)
-
-    program_fee_map = []
-    for p in programs:
-        try:
-            program_fee_map.append(get_fee_for_program(session, p))
-        except Exception as e:
-            print(f"  program {p['name']} FAILED: {e}", flush=True)
+    all_markers = [cfg["section_marker"] for cfg in INSTITUTE_CONFIGS]
 
     groups = []
     for cfg in INSTITUTE_CONFIGS:
         try:
-            groups.append(scrape_institute(cfg, program_fee_map))
+            groups.append(scrape_institute(cfg, all_markers))
         except Exception as e:
             print(f"[{cfg['slug']}] SCRAPE FAILED: {e}", flush=True)
 
