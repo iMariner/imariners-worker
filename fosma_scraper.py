@@ -18,17 +18,21 @@ Flow per institute:
      GET /CourseBooking/CourseBatches/OnGoing and scrape the hidden
      item.Fees / item.FemaleDiscount fields. Fee is a per-program
      attribute, constant across all of that program's batches.
-  4. GET /CourseBooking/FosmaInstitute again -- this single page renders
-     BOTH institutes' on-going/future batches at once. Reliable section
-     boundaries are the literal phrases "View Noida Batches" / "View
-     Kolkata Batches" (NOT the "NOIDA"/"KOLKATA" toggle-button labels,
-     which are mislabeled/reversed). We slice the raw HTML string at
-     those markers and parse each half separately with BeautifulSoup --
-     each batch is a "div.row1 > div.card.bg-light.mb-3" containing
-     "Batch: <code> ... Duration <start> - <end>"; the course name is the
-     nearest preceding non-batch sibling div's text (course name and
-     category div immediately precede the first batch of a course; later
-     batches of the same course have no repeated header).
+  4. GET /CourseBooking/FosmaInstitute once (fetched ONCE for both
+     institutes in main(), not per-institute -- confirmed live that this
+     page renders BOTH institutes' on-going/future batches regardless of
+     which institute is selected in session). Reliable section boundaries
+     are the literal phrases "View Noida Batches" / "View Kolkata
+     Batches" (NOT the "NOIDA"/"KOLKATA" toggle-button labels, which are
+     mislabeled/reversed). Each institute's div.row1 batch cards share one
+     common parent element, but Noida's and Kolkata's parents are two
+     DIFFERENT elements -- so we locate each marker, use BeautifulSoup's
+     find_all_next() to get that institute's row1 cards in document order,
+     then walk their shared parent's direct children to associate each
+     batch with its nearest preceding course-name/category header (a
+     course's header only precedes its FIRST batch; later batches of the
+     same course have no repeated header). Each batch card contains
+     "Batch: <code> ... Duration <start> - <end>".
   5. Fuzzy-match (token overlap ratio, threshold 0.5) each batch's course
      name against that institute's own fee map. Batches with no match
      simply have no fee -- normal "Contact Institute" fallback, expected
@@ -156,29 +160,66 @@ def get_program_fee_map(session):
     return fee_map
 
 
-def parse_institute_section(full_html, section_marker, next_marker=None):
-    """Slice the raw FosmaInstitute HTML at the given marker phrase and
-    parse the batch cards + preceding course-name headers within that
-    slice. Returns a list of {category, course_name, batch_code,
-    start_raw, end_raw}."""
-    start_idx = full_html.find(section_marker)
-    if start_idx == -1:
-        return []
-    if next_marker:
-        end_idx = full_html.find(next_marker, start_idx)
-        fragment = full_html[start_idx:end_idx] if end_idx != -1 else full_html[start_idx:]
-    else:
-        fragment = full_html[start_idx:]
+def _find_marker_element(soup, marker_text):
+    """Find the element containing the given marker phrase as a text node,
+    matching the browser-verified approach exactly (walk text nodes, not
+    a naive string search, since the phrase may be split by whitespace)."""
+    for string in soup.find_all(string=True):
+        if marker_text in string:
+            return string.parent
+    return None
 
-    soup = BeautifulSoup(fragment, "html.parser")
-    all_divs = soup.find_all("div")
+
+def parse_institute_section(soup, section_marker, next_marker=None):
+    """Parse the batch cards + preceding course-name headers belonging to
+    ONE institute's section within the full (already-parsed) FosmaInstitute
+    page. Both institutes' sections live in the SAME document but under
+    two DIFFERENT parent containers -- confirmed live (each institute's
+    div.row1 batch cards share one common parent, but Noida's and
+    Kolkata's parents are two distinct elements). So instead of fragile
+    string-slicing, we:
+      1. locate the marker element (e.g. "View Noida Batches"),
+      2. use BeautifulSoup's document-order traversal (find_all_next) to
+         get all div.row1 batch cards that come after this marker (and,
+         if there's a next_marker, before it),
+      3. take the row1 elements' shared parent and walk ITS direct
+         children in order, exactly mirroring the browser-verified JS
+         state machine: track the last two non-row1 sibling texts as
+         (category, course_name), and read the batch fields off each
+         row1 sibling as it's encountered.
+    Returns a list of {category, course_name, batch_code, start_raw, end_raw}.
+    """
+    marker_el = _find_marker_element(soup, section_marker)
+    if marker_el is None:
+        return []
+
+    row1_after_marker = marker_el.find_all_next("div", class_="row1")
+    if not row1_after_marker:
+        return []
+
+    if next_marker:
+        next_marker_el = _find_marker_element(soup, next_marker)
+        if next_marker_el is not None:
+            row1_after_next = next_marker_el.find_all_next("div", class_="row1")
+            cutoff = len(row1_after_marker) - len(row1_after_next)
+            institute_row1s = row1_after_marker[:cutoff]
+        else:
+            institute_row1s = row1_after_marker
+    else:
+        institute_row1s = row1_after_marker
+
+    if not institute_row1s:
+        return []
+
+    parent = institute_row1s[0].parent
+    children = parent.find_all(recursive=False)
 
     results = []
     last_texts = []
-    for div in all_divs:
-        classes = div.get("class") or []
+    for child in children:
+        classes = child.get("class") or []
         if "row1" in classes:
-            card = div.find("div", class_=lambda c: c and "card" in c and "bg-light" in c)
+            card = child.find("div", class_=lambda c: c and "card" in c and "bg-light" in c)
             if not card:
                 continue
             card_text = re.sub(r"\s+", " ", card.get_text(" ", strip=True))
@@ -193,14 +234,7 @@ def parse_institute_section(full_html, section_marker, next_marker=None):
                 "end_raw": m.group(3),
             })
         else:
-            # Only consider leaf divs (no nested div children) as header
-            # text candidates -- this avoids double-counting the same
-            # header text once for an outer wrapper div and again for an
-            # inner text div, which would otherwise push the real
-            # category/course-name out of the 2-slot rolling buffer below.
-            if div.find("div"):
-                continue
-            text = re.sub(r"\s+", " ", div.get_text(" ", strip=True))
+            text = re.sub(r"\s+", " ", child.get_text(" ", strip=True))
             if text:
                 last_texts.append(text)
                 if len(last_texts) > 2:
@@ -209,7 +243,14 @@ def parse_institute_section(full_html, section_marker, next_marker=None):
     return results
 
 
-def scrape_institute(cfg, all_markers):
+def scrape_institute(cfg, all_markers, shared_soup):
+    """shared_soup is the ONE BeautifulSoup-parsed FosmaInstitute page --
+    confirmed live that this page renders BOTH institutes' batches
+    regardless of which institute is selected in session, so we only need
+    to fetch + parse it once (see fetch_shared_institute_soup) and reuse
+    it here purely for section extraction. Only the fee walk below is
+    genuinely institute-specific (each institute has its own "Select
+    Program" list)."""
     session = requests.Session()
     print(f"[{cfg['slug']}] selecting institute + fetching program/fee list...", flush=True)
 
@@ -222,12 +263,9 @@ def scrape_institute(cfg, all_markers):
     fee_map = get_program_fee_map(session)
     print(f"[{cfg['slug']}] {len(fee_map)} programs/fees fetched", flush=True)
 
-    r = session.get(f"{BASE_URL}/CourseBooking/FosmaInstitute", timeout=30)
-    r.raise_for_status()
-
     idx = all_markers.index(cfg["section_marker"])
     next_marker = all_markers[idx + 1] if idx + 1 < len(all_markers) else None
-    raw_batches = parse_institute_section(r.text, cfg["section_marker"], next_marker)
+    raw_batches = parse_institute_section(shared_soup, cfg["section_marker"], next_marker)
     print(f"[{cfg['slug']}] {len(raw_batches)} batches parsed", flush=True)
 
     batches = []
@@ -280,10 +318,16 @@ def main():
 
     all_markers = [cfg["section_marker"] for cfg in INSTITUTE_CONFIGS]
 
+    print("Fetching shared FosmaInstitute batch listing page (covers all institutes)...", flush=True)
+    shared_session = requests.Session()
+    shared_r = shared_session.get(f"{BASE_URL}/CourseBooking/FosmaInstitute", timeout=30)
+    shared_r.raise_for_status()
+    shared_soup = BeautifulSoup(shared_r.text, "html.parser")
+
     groups = []
     for cfg in INSTITUTE_CONFIGS:
         try:
-            groups.append(scrape_institute(cfg, all_markers))
+            groups.append(scrape_institute(cfg, all_markers, shared_soup))
         except Exception as e:
             print(f"[{cfg['slug']}] SCRAPE FAILED: {e}", flush=True)
 
