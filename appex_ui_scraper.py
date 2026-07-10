@@ -11,12 +11,25 @@ build the payloads. Onboard a new institute of this kind by adding a config
 block below, NOT by writing a new script.
 
 VERIFIED LIVE (TS Rahaman, booking.tsrahaman.org) on 2026-06-23:
-  - Category select : #ddl_929_CourseCategory  (POST SEA=1, Value Added=4)
-  - Type select     : #ddl_930_CourseType      (Single Courses / Package Courses)
-  - Course select   : #ddl_931_CourseId        (populates after type)
-  - Batch select    : #ddl_971_CourseBatchId_1  (injected after course pick)
-  - Fee input       : #txt_972_Fee_1            (readonly, e.g. "5500.00")
-  - Batch label fmt : "29 Jun - 03 Jul, Avl. Seats-19"  (parser already matches)
+- Category select : #ddl_929_CourseCategory (POST SEA=1, Value Added=4)
+- Type select     : #ddl_930_CourseType (Single Courses / Package Courses)
+- Course select   : #ddl_931_CourseId (populates after type)
+- Batch select    : #ddl_971_CourseBatchId_1 (injected after course pick)
+- Fee input       : #txt_972_Fee_1 (readonly, e.g. "5500.00")
+- Batch label fmt : "29 Jun - 03 Jul, Avl. Seats-19" (parser already matches)
+
+VERIFIED LIVE (IMU Navi Mumbai Campus, imunavimumbai.ac.in) on 2026-07-11:
+- No category level -- the form only has Course Type then Course.
+- Type select   : #ddl_930_CourseType (only "Single Courses" -- same ids as
+  ts-rahaman's; this is a fixed AppEx template field number, not
+  institute-specific, so the same CSS works verbatim).
+- Course select : #ddl_931_CourseId
+- Batch select  : #ddl_971_CourseBatchId_1
+- Fee input     : #txt_972_Fee_1
+- Batch label fmt is DIFFERENT here -- a single date, not a range:
+  "13 Jul 2026, Total Seats-24, Avl. Seats-24". parse_batch_label() below
+  now tries the range format first and falls back to this single-date
+  format (end_date is left null in that case).
 
 SCOPE: Single Courses only. Package Courses are intentionally skipped -- a
 package explodes into N component courses each with its own batch+fee that
@@ -25,9 +38,9 @@ Edit the 'include_only' filter on the 'mode' level when a package model is
 decided.
 
 Run:
-    python appex_ui_scraper.py
-    python appex_ui_scraper.py --debug          # headed + screenshots
-    python appex_ui_scraper.py --only ts-rahaman
+  python appex_ui_scraper.py
+  python appex_ui_scraper.py --debug          # headed + screenshots
+  python appex_ui_scraper.py --only ts-rahaman
 """
 
 import asyncio
@@ -47,9 +60,9 @@ MONTHS = {'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
 # ─────────────────────────────────────────────────────────────────────────
 # INSTITUTE CONFIGS -- add institutes here, not new code.
 #   level fields:
-#     name         logical level name (last level is always the batch level)
-#     css          stable selector for the <select>
-#     include_only optional list of option TEXTS to keep (others skipped)
+#     name           logical level name (last level is always the batch level)
+#     css            stable selector for the <select>
+#     include_only   optional list of option TEXTS to keep (others skipped)
 # ─────────────────────────────────────────────────────────────────────────
 INSTITUTE_CONFIGS = [
     {
@@ -62,14 +75,32 @@ INSTITUTE_CONFIGS = [
         'levels': [
             {'name': 'category', 'css': '#ddl_929_CourseCategory'},
             {'name': 'mode', 'css': '#ddl_930_CourseType',
-             'include_only': ['Single Courses']},   # Packages skipped for now
+             'include_only': ['Single Courses']},  # Packages skipped for now
+            {'name': 'course', 'css': '#ddl_931_CourseId'},
+            {'name': 'batch', 'css': '#ddl_971_CourseBatchId_1'},
+        ],
+        'fee_selector': '#txt_972_Fee_1',
+    },
+    {
+        # Matches wp-admin institute id 60, slug "imu-navi-mumbai-campus".
+        # This institute's form has no category level -- Course Type only
+        # ever offers "Single Courses" (no packages at all here), so the
+        # cascade is just type -> course -> batch.
+        'slug': 'imu-navi-mumbai-campus',
+        'name': 'IMU, Navi Mumbai Campus',
+        'source_url': 'https://www.imunavimumbai.ac.in',
+        'entry_url': 'https://www.imunavimumbai.ac.in/Booking/login/register?mkey=ose',
+        'enabled': True,
+        'wait_ms': 2500,
+        'levels': [
+            {'name': 'mode', 'css': '#ddl_930_CourseType',
+             'include_only': ['Single Courses']},
             {'name': 'course', 'css': '#ddl_931_CourseId'},
             {'name': 'batch', 'css': '#ddl_971_CourseBatchId_1'},
         ],
         'fee_selector': '#txt_972_Fee_1',
     },
 ]
-
 
 # ─────────────────────────────────────────────────────────────────────────
 # Generic engine -- institute-agnostic.
@@ -87,7 +118,6 @@ async def options_of(page, css):
             continue
         out.append((value, text))
     return out
-
 
 async def set_value_and_fire(page, css, value):
     """Set the underlying <select>'s value directly via JS and dispatch the
@@ -115,7 +145,6 @@ async def set_value_and_fire(page, css, value):
         [css, value],
     )
 
-
 async def wait_until_ready(page, css, timeout_ms=15000, poll_ms=300):
     """Poll until `css` exists and is either enabled or already has more than
     the placeholder option -- whichever signals the AJAX response landed.
@@ -136,7 +165,6 @@ async def wait_until_ready(page, css, timeout_ms=15000, poll_ms=300):
         elapsed += poll_ms
     return False
 
-
 async def select_and_wait(page, css, value, next_css, wait_ms, retry=True):
     """Drive one cascade step: set the value, then wait for whatever comes
     next (another dropdown, or nothing for the last/batch level) to actually
@@ -156,9 +184,16 @@ async def select_and_wait(page, css, value, next_css, wait_ms, retry=True):
         # fee field a moment to render after the batch pick.
         await page.wait_for_timeout(wait_ms)
 
-
 def parse_batch_label(label):
-    """Matches the date/seats convention already used in worker.js / sync.php."""
+    """Matches the date/seats convention already used in worker.js / sync.php.
+
+    Two formats seen live across institutes on this same AppEx template:
+      1. Range:  "29 Jun - 03 Jul, Avl. Seats-19"          (ts-rahaman)
+      2. Single: "13 Jul 2026, Total Seats-24, Avl. Seats-24"  (IMU Navi Mumbai)
+
+    Tries the range format first; if that doesn't match, falls back to a
+    single date (commencement date only -- end_date stays null, which the
+    ingest endpoint already treats as a valid "no end date given" batch)."""
     start_date = end_date = None
     m = re.search(
         r'(\d{1,2})\s+([A-Za-z]{3})\D*?(\d{1,2})\s+([A-Za-z]{3})(?:\s+(\d{4}))?',
@@ -170,10 +205,19 @@ def parse_batch_label(label):
         if mo1 and mo2:
             start_date = f"{year}-{mo1:02d}-{int(m.group(1)):02d}"
             end_date = f"{year}-{mo2:02d}-{int(m.group(3)):02d}"
+
+    if not start_date:
+        # Fallback: single date like "13 Jul 2026"
+        m2 = re.search(r'(\d{1,2})\s+([A-Za-z]{3})[A-Za-z]*\s+(\d{4})', label)
+        if m2:
+            mo = MONTHS.get(m2.group(2).lower()[:3])
+            if mo:
+                start_date = f"{int(m2.group(3))}-{mo:02d}-{int(m2.group(1)):02d}"
+                end_date = None
+
     seats = re.search(r'(?:Avl\.?\s*Seats|Seats\s*Avl\.?)[-:\s]*(\d+)', label, re.I)
     seats_text = f"{seats.group(1)} seats left" if seats else ''
     return start_date, end_date, seats_text
-
 
 async def extract_fee(page, config):
     sel = config.get('fee_selector')
@@ -190,7 +234,6 @@ async def extract_fee(page, config):
     m = re.search(r'(?:₹|Rs\.?|INR)\s?([\d,]+(?:\.\d{1,2})?)', body)
     return float(m.group(1).replace(',', '')) if m else None
 
-
 async def debug_dump(page, tag):
     if not DEBUG:
         return
@@ -198,7 +241,6 @@ async def debug_dump(page, tag):
         await page.screenshot(path=f"debug_{tag}.png")
     except Exception:
         pass
-
 
 def _checkpoint(slug, results):
     """Write whatever's been collected so far to a recoverable file. If the
@@ -211,7 +253,6 @@ def _checkpoint(slug, results):
             json.dump(results, f, indent=2, ensure_ascii=False)
     except Exception:
         pass
-
 
 async def walk(page, levels, config, path=None, results=None):
     """Recursively walk the cascade. Last level = batch level. Works for any
@@ -231,7 +272,7 @@ async def walk(page, levels, config, path=None, results=None):
 
     if not opts:
         if not is_last:
-            print(f"    [WARN] no options at level '{level['name']}' (path={path})")
+            print(f"  [WARN] no options at level '{level['name']}' (path={path})")
         return results
 
     for value, text in opts:
@@ -267,11 +308,10 @@ async def walk(page, levels, config, path=None, results=None):
             # parent recursion and discard every result already collected
             # for this whole institute -- which is exactly what happened in
             # production (a 9m25s run that still reported 0 batch rows).
-            print(f"    [ERROR] level '{level['name']}'={text!r} (path={path}): {e}")
+            print(f"  [ERROR] level '{level['name']}'={text!r} (path={path}): {e}")
             continue
 
     return results
-
 
 async def goto_and_wait_for_form(page, config, attempts=3):
     """Navigate and wait for the actual category dropdown to exist, instead
@@ -297,13 +337,12 @@ async def goto_and_wait_for_form(page, config, attempts=3):
                 html = await page.content()
                 with open(f"failure_{config['slug']}_attempt{attempt}.html", 'w', encoding='utf-8') as f:
                     f.write(html[:200000])
-                print(f"    current url: {page.url}")
+                print(f"  current url: {page.url}")
             except Exception as diag_err:
-                print(f"    [WARN] could not capture diagnostics: {diag_err}")
+                print(f"  [WARN] could not capture diagnostics: {diag_err}")
             if attempt < attempts:
                 await page.wait_for_timeout(5000)
     raise last_error
-
 
 async def scrape_institute(browser, config):
     print(f"\n=== {config['name']} ({config['slug']}) ===")
@@ -326,7 +365,6 @@ async def scrape_institute(browser, config):
             return []
     finally:
         await context.close()
-
 
 async def main():
     print(f"AppEx UI scraper run @ {datetime.utcnow().isoformat()} UTC")
@@ -370,7 +408,6 @@ async def main():
         print("[FATAL] 0 batch rows scraped across all institutes -- failing the run.")
         sys.exit(1)
     return groups
-
 
 if __name__ == '__main__':
     asyncio.run(main())
