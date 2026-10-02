@@ -34,6 +34,7 @@ run "MarineIMS institutes"            python marineims_scraper.py
 run "FOSMA"                           python fosma_scraper.py
 run "SIMF"                            python simf_scraper.py
 run "Anvay"                           python anvay_scraper.py
+run "CMC Chennai"                     python cmc_chennai_scraper.py
 
 if [ "${1:-}" != "fast" ]; then
   python -m playwright install chromium >/dev/null

@@ -1,0 +1,43 @@
+name: Scrape CMC Maritime Academy Chennai (cmcmaritimechennai.com)
+
+on:
+  schedule:
+    # Runs at 3:00 AM UTC (8:30 AM IST) and 3:00 PM UTC (8:30 PM IST)
+    - cron: '0 3,15 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run CMC Chennai scraper (scrapes + pushes to WordPress)
+        env:
+          IMCFI_INGEST_URL: https://imariners.com/wp-json/imcfi/v1/ingest-appex-ui
+          WORKER_TOKEN: ${{ secrets.WORKER_TOKEN }}
+          WP_URL: ${{ secrets.WP_URL }}
+        run: python cmc_chennai_scraper.py
+
+      - name: Upload artifacts (for debugging if fails)
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cmc-chennai-scrape-output
+          path: |
+            cmc_chennai_courses.json
