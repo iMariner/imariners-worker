@@ -104,6 +104,15 @@ INSTITUTE_CONFIGS = [
         "register_path": "/register",
         "source_url": "https://zasha.marineims.com/register",
     },
+    {
+        # wp-admin institute id 29. Found via its own website (cmtnoida.com links
+        # to this MarineIMS booking form) on 2026-10-02.
+        "slug": "centre-for-maritime-training-noida",
+        "name": "Centre For Maritime Training Noida",
+        "base_url": "https://cmtnoida.marineims.com",
+        "register_path": "/register",
+        "source_url": "https://cmtnoida.marineims.com/register",
+    },
     # Add more marineims.com institutes here as they're onboarded. Always
     # check wp-admin's Institutes page first for an existing DG-approved
     # entry and reuse its slug -- never invent a new slug for an institute
