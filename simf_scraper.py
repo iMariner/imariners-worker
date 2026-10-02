@@ -34,6 +34,8 @@ import csv
 import os
 import sys
 import requests
+
+from ingest import push
 from bs4 import BeautifulSoup
 
 INSTITUTE_SLUG = "sakshi-institute-of-maritime-foundation"
@@ -127,15 +129,7 @@ def main():
             writer.writeheader()
             writer.writerows(batches)
 
-    print(f"Posting {len(batches)} total batch rows to {WP_INGEST_URL}", flush=True)
-    resp = requests.post(
-        WP_INGEST_URL,
-        json=[group],
-        headers={"X-IMCFI-Token": WORKER_TOKEN, "Content-Type": "application/json"},
-        timeout=120,
-    )
-    print(f"Ingest response: {resp.status_code} {resp.text[:1000]}", flush=True)
-    resp.raise_for_status()
+    push(WP_INGEST_URL, [group])
 
 
 if __name__ == "__main__":

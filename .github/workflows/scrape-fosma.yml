@@ -6,16 +6,21 @@ on:
     - cron: '0 2,14 * * *'
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -26,11 +31,12 @@ jobs:
         env:
           IMCFI_INGEST_URL: https://imariners.com/wp-json/imcfi/v1/ingest-fosma
           WORKER_TOKEN: ${{ secrets.WORKER_TOKEN }}
+          WP_URL: ${{ secrets.WP_URL }}
         run: python fosma_scraper.py
 
       - name: Upload artifacts (for debugging if fails)
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fosma-scrape-output
           path: |

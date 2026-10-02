@@ -50,6 +50,8 @@ import re
 import sys
 
 import requests
+
+from ingest import push
 from bs4 import BeautifulSoup
 
 BASE_URL = "https://fosma.net"
@@ -341,15 +343,7 @@ def main():
             writer.writeheader()
             writer.writerows(all_rows)
 
-    print(f"Posting {sum(len(g['batches']) for g in groups)} total batch rows to {WP_INGEST_URL}", flush=True)
-    resp = requests.post(
-        WP_INGEST_URL,
-        json=groups,
-        headers={"X-IMCFI-Token": WORKER_TOKEN, "Content-Type": "application/json"},
-        timeout=120,
-    )
-    print(f"Ingest response: {resp.status_code} {resp.text[:1000]}", flush=True)
-    resp.raise_for_status()
+    push(WP_INGEST_URL, groups)
 
 
 if __name__ == "__main__":

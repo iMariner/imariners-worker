@@ -12,7 +12,31 @@ const INSTITUTES_ENDPOINT = `${WP_URL}/wp-json/imcfi/v1/institutes`;
 const INGEST_ENDPOINT = `${WP_URL}/wp-json/imcfi/v1/ingest`;
 const SYNC_LOG_ENDPOINT = `${WP_URL}/wp-json/imcfi/v1/sync-log`;
 const UPDATE_SYNC_ENDPOINT = `${WP_URL}/wp-json/imcfi/v1/update-sync-time`;
-const AUTH_HEADERS = { 'X-IMCFI-Token': WORKER_TOKEN };
+const AUTH_HEADERS = {
+    'X-IMCFI-Token': WORKER_TOKEN,
+    'User-Agent': 'imariners-worker/1.0 (+https://github.com/iMariner/imariners-worker)',
+    'Accept': 'application/json'
+};
+
+// Only these source types are scraped here. Others are either handled by their own
+// workflow (bpmarine, appex-ui, marineims, fosma, simf) or entered manually in wp-admin.
+const SCRAPED_HERE = new Set(['appex']);
+
+let failures = 0;
+
+// imariners.com is behind Cloudflare, which can answer GitHub runners with a
+// "Just a moment..." challenge (HTTP 403). Report that clearly instead of a bare 403.
+function describeHttpError(err) {
+    const status = err.response && err.response.status;
+    const body = err.response && typeof err.response.data === 'string' ? err.response.data : '';
+    if ((status === 403 || status === 503) && body.includes('Just a moment')) {
+        return 'Cloudflare bot challenge blocked the request (add a WAF skip rule for /wp-json/imcfi/v1/ and disable Bot Fight Mode)';
+    }
+    if (status === 401 || status === 403) {
+        return `WordPress rejected the token (${status}). Check the WORKER_TOKEN secret matches STCW Finder > Settings`;
+    }
+    return err.message;
+}
 
 const DELAY_BETWEEN_INSTITUTES = 5000;
 const REQUEST_DELAY = 1000;
@@ -48,8 +72,8 @@ async function fetchInstitutes() {
         const res = await axios.get(INSTITUTES_ENDPOINT, { headers: AUTH_HEADERS, timeout: 15000 });
         return res.data;
     } catch (err) {
-        console.error('[FETCH ERROR] Could not retrieve institutes:', err.message);
-        return [];
+        console.error('[FETCH ERROR] Could not retrieve institutes:', describeHttpError(err));
+        process.exit(1);
     }
 }
 
@@ -230,8 +254,10 @@ async function scrapeInstitute(inst) {
             console.log(`[SUCCESS] ${inst.name} – ${batches.length} batches sent.`);
             await updateSyncTime(inst.id);
         } catch (err) {
-            errorMsg = `Ingest failed: ${err.message}`;
+            errorMsg = `Ingest failed: ${describeHttpError(err)}`;
             status = 'error';
+            failures++;
+            console.error(`[ERROR] ${inst.name}: ${errorMsg}`);
         }
     } else {
         console.log(`[NO DATA] ${inst.name} – ${errorMsg}`);
@@ -241,16 +267,19 @@ async function scrapeInstitute(inst) {
 
 async function run() {
     console.log(`[START] Worker started at ${new Date().toISOString()}`);
-    const institutes = await fetchInstitutes();
+    const all = await fetchInstitutes();
+    const institutes = (Array.isArray(all) ? all : []).filter(i => SCRAPED_HERE.has(i.source_type));
+    console.log(`[INFO] ${institutes.length} of ${Array.isArray(all) ? all.length : 0} active institutes use a source type scraped here (${[...SCRAPED_HERE].join(', ')}).`);
     if (!institutes.length) {
-        console.log('[WARN] No active institutes found.');
-        return;
+        console.error('[ERROR] No institutes to scrape. Check source_type values in STCW Finder > Institutes.');
+        process.exit(1);
     }
     for (const inst of institutes) {
         await scrapeInstitute(inst);
         await delay(DELAY_BETWEEN_INSTITUTES);
     }
-    console.log(`[FINISH] Worker finished at ${new Date().toISOString()}`);
+    console.log(`[FINISH] Worker finished at ${new Date().toISOString()} with ${failures} ingest failure(s).`);
+    if (failures) process.exit(1);
 }
-run().catch(console.error);
+run().catch(err => { console.error('[FATAL]', err); process.exit(1); });
 

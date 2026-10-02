@@ -6,28 +6,33 @@ on:
     - cron: '0 1,13 * * *'
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
       - name: Install Playwright (Python package)
-        run: pip install playwright
+        run: pip install playwright requests
 
       - name: Get installed Playwright version
         id: pw-version
         run: echo "version=$(pip show playwright | grep -i '^Version' | awk '{print $2}')" >> "$GITHUB_OUTPUT"
 
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
@@ -47,19 +52,15 @@ jobs:
       - name: Run BP Marine scraper
         run: python bpmarine_scraper.py
       
-      - name: Push data to WordPress
+      - name: Push data to WordPress (fails the run if nothing is saved)
         env:
           WP_URL: ${{ secrets.WP_URL }}
           WORKER_TOKEN: ${{ secrets.WORKER_TOKEN }}
-        run: |
-          curl -X POST "${WP_URL}/wp-json/imcfi/v1/ingest-bpmarine" \
-            -H "X-IMCFI-Token: ${WORKER_TOKEN}" \
-            -H "Content-Type: application/json" \
-            --data @bpmarine_courses.json
+        run: python ingest.py ingest-bpmarine bpmarine_courses.json
       
       - name: Upload artifacts (for debugging if fails)
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bpmarine-scrape-output
           path: |
