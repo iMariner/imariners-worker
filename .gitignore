@@ -1,0 +1,6 @@
+*_courses.csv
+*_courses.json
+.venv/
+appex_ui_checkpoint_*.json
+failure_*
+node_modules/
