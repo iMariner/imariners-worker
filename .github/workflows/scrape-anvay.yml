@@ -1,0 +1,44 @@
+name: Scrape Anvay Maritime Institute (anvayonline.com)
+
+on:
+  schedule:
+    # Runs at 2:45 AM UTC (8:15 AM IST) and 2:45 PM UTC (8:15 PM IST)
+    - cron: '45 2,14 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run Anvay scraper (scrapes + pushes to WordPress)
+        env:
+          IMCFI_INGEST_URL: https://imariners.com/wp-json/imcfi/v1/ingest-marineims
+          WORKER_TOKEN: ${{ secrets.WORKER_TOKEN }}
+          WP_URL: ${{ secrets.WP_URL }}
+        run: python anvay_scraper.py
+
+      - name: Upload artifacts (for debugging if fails)
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: anvay-scrape-output
+          path: |
+            anvay_courses.json
+            anvay_courses.csv
