@@ -35,7 +35,7 @@ import os
 import sys
 import requests
 
-from ingest import push
+from ingest import push, retry_session
 from bs4 import BeautifulSoup
 
 INSTITUTE_SLUG = "sakshi-institute-of-maritime-foundation"
@@ -89,7 +89,7 @@ def main():
         print("ERROR: WORKER_TOKEN env var not set", flush=True)
         sys.exit(1)
 
-    session = requests.Session()
+    session = retry_session()
     print(f"[{INSTITUTE_SLUG}] fetching csrf token + course list...", flush=True)
     token, courses = get_token_and_courses(session)
     print(f"[{INSTITUTE_SLUG}] {len(courses)} courses found", flush=True)

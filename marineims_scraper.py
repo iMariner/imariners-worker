@@ -29,7 +29,7 @@ import re
 import sys
 import requests
 
-from ingest import push
+from ingest import push, retry_session
 
 INSTITUTE_CONFIGS = [
     {
@@ -132,7 +132,7 @@ def post_form(session, base_url, path, token, fields):
 
 
 def scrape_institute(cfg):
-    session = requests.Session()
+    session = retry_session()
     base_url = cfg["base_url"]
     register_path = cfg.get("register_path", "/register")
     print(f"[{cfg['slug']}] fetching csrf token...", flush=True)

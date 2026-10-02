@@ -51,7 +51,7 @@ import sys
 
 import requests
 
-from ingest import push
+from ingest import push, retry_session
 from bs4 import BeautifulSoup
 
 BASE_URL = "https://fosma.net"
@@ -253,7 +253,7 @@ def scrape_institute(cfg, all_markers, shared_soup):
     it here purely for section extraction. Only the fee walk below is
     genuinely institute-specific (each institute has its own "Select
     Program" list)."""
-    session = requests.Session()
+    session = retry_session()
     print(f"[{cfg['slug']}] selecting institute + fetching program/fee list...", flush=True)
 
     session.post(
@@ -321,7 +321,7 @@ def main():
     all_markers = [cfg["section_marker"] for cfg in INSTITUTE_CONFIGS]
 
     print("Fetching shared FosmaInstitute batch listing page (covers all institutes)...", flush=True)
-    shared_session = requests.Session()
+    shared_session = retry_session()
     shared_r = shared_session.get(f"{BASE_URL}/CourseBooking/FosmaInstitute", timeout=30)
     shared_r.raise_for_status()
     shared_soup = BeautifulSoup(shared_r.text, "html.parser")

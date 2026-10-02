@@ -16,8 +16,27 @@ import os
 import sys
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 USER_AGENT = "imariners-worker/1.0 (+https://github.com/iMariner/imariners-worker)"
+
+
+def retry_session():
+    """requests.Session that retries dropped connections and 5xx errors.
+
+    Institute booking sites (MarineIMS in particular) sometimes close the
+    connection mid-run ("RemoteDisconnected"); one blip used to drop that
+    institute's whole catalogue for the run. Their POST endpoints only read
+    data, so retrying them is safe.
+    """
+    retry = Retry(total=4, connect=4, read=4, backoff_factor=2,
+                  status_forcelist=(500, 502, 503, 504),
+                  allowed_methods=frozenset(["GET", "POST"]), raise_on_status=False)
+    s = requests.Session()
+    s.mount("https://", HTTPAdapter(max_retries=retry))
+    s.mount("http://", HTTPAdapter(max_retries=retry))
+    return s
 
 
 def base_url():
