@@ -21,70 +21,84 @@ CATEGORIES = {
 
 BASE_URL = 'https://bpmarine.in/booking/GenericScreen/BookSelectedCourse.aspx'
 
+SEL = '#ContentPlaceHolder1_ContentPlaceHolder2_'
+
+
+async def settle(page, ms=1500):
+    """Wait for the ASP.NET UpdatePanel postback to finish, then a short pause."""
+    try:
+        await page.wait_for_load_state('networkidle', timeout=15000)
+    except Exception:
+        pass
+    await page.wait_for_timeout(ms)
+
+
+async def open_course(page, category_id, course_id=None):
+    """(Re)load the booking form and select category (and course)."""
+    await page.goto(BASE_URL)
+    await page.wait_for_load_state('networkidle')
+    await page.select_option(SEL + 'ddlCategory', category_id, timeout=20000)
+    await settle(page, 2500)
+    if course_id:
+        await page.select_option(SEL + 'ddlCourseName', course_id, timeout=20000)
+        await settle(page, 2500)
+
+
 async def scrape_category(page, category_id, category_name):
-    """Scrape all courses and batches for a single category."""
+    """Scrape all courses and batches for a single category.
+
+    Each course and each batch date is handled on its own: a dropdown that
+    stalls (the Refresher category used to time out on every run and lose all
+    its batches) now skips just that date, reloads the form and carries on.
+    """
     results = []
-    
-    # Step 1: Select category
-    await page.select_option('#ContentPlaceHolder1_ContentPlaceHolder2_ddlCategory', category_id)
-    await page.wait_for_timeout(2500)  # Wait for UpdatePanel
-    
-    # Step 2: Get all course options
-    course_options = await page.query_selector_all(
-        '#ContentPlaceHolder1_ContentPlaceHolder2_ddlCourseName option'
-    )
-    
-    for opt in course_options[1:]:  # Skip "-- Select --"
-        course_id = await opt.get_attribute('value')
-        course_name = await opt.text_content()
+    await open_course(page, category_id)
+    courses = [(await o.get_attribute('value'), (await o.text_content() or '').strip())
+               for o in (await page.query_selector_all(SEL + 'ddlCourseName option'))[1:]]
+
+    for course_id, course_name in courses:
         if not course_id or not course_name:
             continue
-        
-        # Select the course
-        await page.select_option(
-            '#ContentPlaceHolder1_ContentPlaceHolder2_ddlCourseName', 
-            course_id
-        )
-        await page.wait_for_timeout(2500)
-        
-        # Step 3: Get all date options
-        date_options = await page.query_selector_all(
-            '#ContentPlaceHolder1_ContentPlaceHolder2_ddlCommencementDate option'
-        )
-        
-        for date_opt in date_options[1:]:
-            batch_id = await date_opt.get_attribute('value')
-            date_text = await date_opt.text_content()
+        try:
+            await page.select_option(SEL + 'ddlCourseName', course_id, timeout=20000)
+            await settle(page, 2500)
+        except Exception as exc:
+            print(f"    course {course_name}: reselect after error ({str(exc)[:80]})")
+            try:
+                await open_course(page, category_id, course_id)
+            except Exception as exc2:
+                print(f"    SKIP course {course_name}: {str(exc2)[:120]}")
+                continue
+
+        dates = [(await o.get_attribute('value'), (await o.text_content() or '').strip())
+                 for o in (await page.query_selector_all(SEL + 'ddlCommencementDate option'))[1:]]
+        for batch_id, date_text in dates:
             if not batch_id or not date_text:
                 continue
-            
-            # Step 4: Select the date to reveal fees & duration
-            await page.select_option(
-                '#ContentPlaceHolder1_ContentPlaceHolder2_ddlCommencementDate',
-                batch_id
-            )
-            await page.wait_for_timeout(2000)
-            
-            # Step 5: Extract the data
-            duration = await page.text_content(
-                '#ContentPlaceHolder1_ContentPlaceHolder2_lbl_duration'
-            )
-            fees = await page.text_content(
-                '#ContentPlaceHolder1_ContentPlaceHolder2_lblcourse_fee'
-            )
-            
+            try:
+                await page.select_option(SEL + 'ddlCommencementDate', batch_id, timeout=20000)
+                await settle(page, 1500)
+                duration = await page.text_content(SEL + 'lbl_duration', timeout=10000)
+                fees = await page.text_content(SEL + 'lblcourse_fee', timeout=10000)
+            except Exception as exc:
+                print(f"    skip {course_name} {date_text}: {str(exc)[:100]}")
+                try:
+                    await open_course(page, category_id, course_id)
+                except Exception:
+                    break
+                continue
             results.append({
                 'category_id': category_id,
                 'category_name': category_name,
                 'course_id': course_id,
-                'course_name': course_name.strip(),
+                'course_name': course_name,
                 'batch_id': batch_id,
-                'commencement_date': date_text.strip(),
+                'commencement_date': date_text,
                 'has_offer': '/OFFER' in date_text,
                 'duration': duration.strip() if duration else '',
                 'course_fees': fees.strip() if fees else '',
             })
-    
+
     return results
 
 async def main():
@@ -100,10 +114,6 @@ async def main():
             print(f"Scraping category: {cat_name} ({cat_id})")
 
             try:
-                # Fresh page for each category (prevents stale ViewState)
-                await page.goto(BASE_URL)
-                await page.wait_for_load_state('networkidle')
-
                 results = await scrape_category(page, cat_id, cat_name)
                 all_data.extend(results)
                 print(f"  Found {len(results)} batches for {cat_name}")
