@@ -100,6 +100,23 @@ INSTITUTE_CONFIGS = [
         ],
         'fee_selector': '#txt_972_Fee_1',
     },
+    {
+        # Matches wp-admin institute id 66. Same eMTI booking app as the IMU
+        # Navi Mumbai campus above, self-hosted on the campus domain.
+        'slug': 'indian-maritime-university-mumbai-port-campus-lbs-camsar-meri',
+        'name': 'IMU, Mumbai Port Campus',
+        'source_url': 'https://imumumbaiport.ac.in',
+        'entry_url': 'https://imumumbaiport.ac.in/BOOKING/Login/Register?mkey=ose',
+        'enabled': True,
+        'wait_ms': 2500,
+        'levels': [
+            {'name': 'mode', 'css': '#ddl_930_CourseType',
+             'include_only': ['Single Courses']},
+            {'name': 'course', 'css': '#ddl_931_CourseId'},
+            {'name': 'batch', 'css': '#ddl_971_CourseBatchId_1'},
+        ],
+        'fee_selector': '#txt_972_Fee_1',
+    },
 ]
 
 # ─────────────────────────────────────────────────────────────────────────
